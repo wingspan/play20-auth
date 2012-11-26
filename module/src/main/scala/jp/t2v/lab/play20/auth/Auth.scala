@@ -2,6 +2,8 @@ package jp.t2v.lab.play20.auth
 
 import play.api.mvc._
 import play.api.libs.iteratee.{Input, Done}
+import scala.Left
+import scala.Right
 
 trait Auth {
   self: Controller with AuthConfig =>
@@ -38,6 +40,35 @@ trait Auth {
   } yield {
     idContainer.prolongTimeout(token, sessionTimeoutInSeconds)
     user
+  }
+
+
+
+
+  def authorizedActionDispatch(dispatch: Seq[(Authority, User => Request[AnyContent] => Result)]) = {
+    authorizedActionDispatch[AnyContent](BodyParsers.parse.anyContent, dispatch)
+  }
+
+  def authorizedActionDispatch[A](bodyParser: BodyParser[A], dispatch: Seq[(Authority, User => Request[A] => Result)]) = {
+    Action(bodyParser) { req =>
+      type F = User => Request[A] => Result
+
+      // find the first controller that authenticates and invoke it
+      lazy val authResults:Seq[Either[Result, (User, F)]] =
+        dispatch.map { case (authority, f:F) =>
+          authorized(authority)(req).fold(
+            err => Left(err),
+            user => Right((user, f))
+          )
+        }
+
+      val mRoute = authResults.find(_.isRight)
+      val routeOrAuthError : Either[Result, (User, F)] = if (mRoute.isDefined) mRoute.get
+                                                         else authResults.last  // the last error was from the most general attempt
+
+      val result : Result = routeOrAuthError.fold(identity, { _ match { case (user, f) => f(user)(req)} })
+      result
+    }
   }
 
 }
